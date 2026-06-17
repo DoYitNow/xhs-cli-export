@@ -1,5 +1,8 @@
-# xhs-cli-export 安装脚本 (Windows PowerShell)
+﻿# xhs-cli-export 安装脚本 (Windows PowerShell)
 # 用法: .\install.ps1
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  xhs-cli-export 安装脚本" -ForegroundColor Cyan
