@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-
 INVALID_FILENAME_CHARS = r'<>:"/\|?*'
 SCRIPT_DIR = Path(__file__).resolve().parent
 SOURCE_LABELS = {
@@ -155,7 +154,13 @@ def xhs_command(xhs_bin: str, args: list[str]) -> list[str]:
     return [xhs_bin, *args]
 
 
-def run_xhs(xhs_bin: str, args: list[str], *, check: bool = True, cwd: str | None = None) -> subprocess.CompletedProcess:
+def run_xhs(
+    xhs_bin: str,
+    args: list[str],
+    *,
+    check: bool = True,
+    cwd: str | None = None,
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
@@ -1398,7 +1403,7 @@ def check_install(args: argparse.Namespace) -> None:
         if not authenticated:
             safe_print("")
             safe_print("恢复建议:")
-            safe_print(f"  1. 正常浏览器完成小红书登录/验证")
+            safe_print("  1. 正常浏览器完成小红书登录/验证")
             safe_print(f"  2. 导入字段: \"{xhs_bin}\" auth import-fields --interactive")
             safe_print(f"  3. 或扫码: \"{xhs_bin}\" login --qr-output xhs-login-qr.png")
         return
