@@ -7,7 +7,7 @@ description: "通过 xhs-cli（逆向工程 API）将小红书收藏或点赞笔
 
 将小红书收藏或点赞记录导出为结构化 Markdown 文件。纯导出工具，不绑定任何知识库体系。
 
-推荐入口：`xhs export favorites ...` 或 `xhs export likes ...`
+推荐入口：`python src/xhs_export.py export --source favorites ...` 或 `python src/xhs_export.py export --source likes ...`
 
 内部导出引擎：`xhs_export.py`（需要单独安装或复制到项目中）
 
@@ -73,20 +73,20 @@ xhs login --qr-output ".\xhs-login-qr.png" --print-link
 
 ```powershell
 # 导出到当前目录（不限量，完整详情）
-xhs export likes
+python src/xhs_export.py export --source likes
 
 # 指定输出目录
-xhs export favorites --output-dir "D:\Desktop\my-notes"
+python src/xhs_export.py export --source favorites --output-dir "D:\Desktop\my-notes"
 
 # 快速抽样预览，不抓详情
-xhs export likes --max 100 --no-fetch-details --dry-run
+python src/xhs_export.py export --source likes --max 100 --no-fetch-details --dry-run
 ```
 
-不要绕过 CLI 直接写临时爬虫。如果 `xhs export` 失败，报告错误并停止。
+不要绕过 CLI 直接写临时爬虫。如果导出脚本失败，报告错误并停止。
 
 仅在用户明确要求快速列表或抽样时才使用 `--no-fetch-details`，因为它通常只有封面图且可能缺正文。使用 `--dry-run` 预览路径。仅在用户明确要求全量历史导入时使用 `--all-history`。仅在用户明确要求清除此来源的增量检查点时使用 `--reset-state --reset-state-only`。
 
-**注意**: `xhs export` 会调用导出脚本，脚本再调用 xhs CLI 通过逆向工程 API 获取收藏/点赞数据。完整详情模式（默认）采用流式加载：逐条接收笔记列表，每收到一条立即获取详情并导出 Markdown，实时显示进度。快速模式（`--no-fetch-details`）以 NDJSON 流式输出列表，不抓详情页。脚本会保存 `<source>_stream.jsonl`，若中途会话过期/风控，已写出的 Markdown 会保留，但不会推进增量 checkpoint；修复登录后可以安全重跑。
+**注意**: 导出脚本会调用 xhs CLI 通过逆向工程 API 获取收藏/点赞数据。完整详情模式（默认）采用流式加载：逐条接收笔记列表，每收到一条立即获取详情并导出 Markdown，实时显示进度。快速模式（`--no-fetch-details`）以 NDJSON 流式输出列表，不抓详情页。脚本会保存 `<source>_stream.jsonl`，若中途会话过期/风控，已写出的 Markdown 会保留，但不会推进增量 checkpoint；修复登录后可以安全重跑。
 
 额外可用选项：
 - `--save-images / --no-images`：是否下载笔记图片（默认下载）
