@@ -1,33 +1,15 @@
 ---
 name: xiaohongshu-export
-description: "通过 xhs-cli（逆向工程 API）将小红书收藏或点赞笔记增量导出为 Markdown 文件，支持流式详情获取、图片下载和增量状态管理。适用于任何目录。当用户要求导出、同步、导入小红书收藏夹 / 点赞 / favorites / liked notes 时使用此 Skill。"
+description: "通过 xhs-cli（逆向工程 API）将小红书收藏、点赞或搜索笔记增量导出为 Markdown 文件，支持流式详情获取、图片下载和增量状态管理。适用于任何目录。当用户要求导出、同步、导入小红书收藏夹 / 点赞 / favorites / liked notes / 搜索结果时使用此 Skill。"
 ---
 
 # 小红书笔记导出
 
-将小红书收藏或点赞记录导出为结构化 Markdown 文件。纯导出工具，不绑定任何知识库体系。
+将小红书收藏、点赞或搜索结果导出为结构化 Markdown 文件。纯导出工具，不绑定任何知识库体系。
 
-推荐入口：`python src/xhs_export.py export --source favorites ...` 或 `python src/xhs_export.py export --source likes ...`
+推荐入口：`xhs export favorites ...`、`xhs export likes ...` 或 `xhs export search ...`
 
-内部导出引擎：`xhs_export.py`（需要单独安装或复制到项目中）
-
-## 前置要求
-
-1. 安装 [xhs-cli-headless](https://github.com/kyalpha313/xhs-cli-headless)
-2. 完成小红书登录
-
-```powershell
-# 安装 xhs-cli-headless
-uv tool install xhs-cli-headless
-# 或
-pipx install xhs-cli-headless
-
-# 检查登录状态
-xhs auth doctor --json
-
-# 如果未登录，使用二维码登录
-xhs login --qr-output ".\xhs-login-qr.png" --print-link
-```
+内部导出引擎：`C:\Users\yuyitian\.claude\skills\xiaohongshu-export\xhs_export.py`
 
 ## 预检查
 
@@ -35,10 +17,10 @@ xhs login --qr-output ".\xhs-login-qr.png" --print-link
 xhs auth doctor --json
 ```
 
-当前全局 `xhs` 是基于逆向工程 API 的 CLI（`Xiaohongshu CLI via reverse-engineered API`）。如果 PATH 异常，可临时指定稳定路径：
+当前全局 `xhs` 是基于逆向工程 API 的 CLI（`Xiaohongshu CLI via reverse-engineered API`），并额外注册了 `xhs export`。如果 PATH 异常，可临时指定稳定路径：
 
 ```text
-C:\Users\<username>\.xiaohongshu-cli\headless-venv\Scripts\xhs.exe
+C:\Users\yuyitian\.xiaohongshu-cli\headless-venv\Scripts\xhs.exe
 ```
 
 如果 `auth doctor` 显示 `Session expired`、`invalid`、`missing` 或需要验证，优先让用户在正常浏览器完成小红书登录/验证，然后导入字段：
@@ -63,9 +45,10 @@ xhs login --qr-output ".\xhs-login-qr.png" --print-link
 |---|---|
 | 收藏、收藏夹、favorites、collected notes | `favorites` |
 | 点赞、赞过、liked notes | `likes` |
-| 两者 / 全部 | 先导出 `favorites`，再导出 `likes` |
+| 搜索、搜索结果、search results | `search` |
+| 收藏+点赞 / 全部（不含搜索） | 先导出 `favorites`，再导出 `likes` |
 
-如果用户未指定来源，导出前先简短询问。
+如果用户未指定来源，导出前先简短询问。搜索来源需要额外提供关键词。
 
 ## 导出
 
@@ -73,20 +56,49 @@ xhs login --qr-output ".\xhs-login-qr.png" --print-link
 
 ```powershell
 # 导出到当前目录（不限量，完整详情）
-python src/xhs_export.py export --source likes
+xhs export likes
 
 # 指定输出目录
-python src/xhs_export.py export --source favorites --output-dir "D:\Desktop\my-notes"
+xhs export favorites --output-dir "D:\Desktop\my-notes"
 
 # 快速抽样预览，不抓详情
-python src/xhs_export.py export --source likes --max 100 --no-fetch-details --dry-run
+xhs export likes --max 100 --no-fetch-details --dry-run
 ```
 
-不要绕过 CLI 直接写临时爬虫。如果导出脚本失败，报告错误并停止。
+### 搜索导出
+
+搜索导出通过分页获取搜索结果，支持排序和类型筛选：
+
+```powershell
+# 搜索并导出（默认综合排序、全部类型、不限量）
+xhs export search --keyword "React 教程"
+
+# 按热度排序、仅图片笔记
+xhs export search --keyword "旅行攻略" --sort popular --type image
+
+# 限制数量、指定输出目录
+xhs export search --keyword "Python" --max 50 --output-dir "D:\Desktop\search-notes"
+
+# 按最新排序、仅视频
+xhs export search --keyword "美食" --sort latest --type video
+
+# 快速预览
+xhs export search --keyword "穿搭" --max 20 --no-fetch-details --dry-run
+```
+
+搜索参数：
+- `--keyword`：搜索关键词（必填）
+- `--sort`：排序方式，`general`（综合，默认）/ `popular`（最热）/ `latest`（最新）
+- `--search-type`：笔记类型，`all`（全部，默认）/ `video`（视频）/ `image`（图文）
+
+不要绕过 CLI 直接写临时爬虫。如果 `xhs export` 失败，报告错误并停止。
 
 仅在用户明确要求快速列表或抽样时才使用 `--no-fetch-details`，因为它通常只有封面图且可能缺正文。使用 `--dry-run` 预览路径。仅在用户明确要求全量历史导入时使用 `--all-history`。仅在用户明确要求清除此来源的增量检查点时使用 `--reset-state --reset-state-only`。
 
-**注意**: 导出脚本会调用 xhs CLI 通过逆向工程 API 获取收藏/点赞数据。完整详情模式（默认）采用流式加载：逐条接收笔记列表，每收到一条立即获取详情并导出 Markdown，实时显示进度。快速模式（`--no-fetch-details`）以 NDJSON 流式输出列表，不抓详情页。脚本会保存 `<source>_stream.jsonl`，若中途会话过期/风控，已写出的 Markdown 会保留，但不会推进增量 checkpoint；修复登录后可以安全重跑。
+**注意**: `xhs export` 会调用本 skill 的导出脚本，脚本再调用 xhs CLI 通过逆向工程 API 获取数据。
+- 收藏/点赞：完整详情模式（默认）采用流式加载，逐条接收笔记列表，每收到一条立即获取详情并导出 Markdown。
+- 搜索：采用分页加载，逐页获取搜索结果，每条结果获取详情后导出 Markdown。
+- 脚本会保存 `<source>_stream.jsonl`，若中途会话过期/风控，已写出的 Markdown 会保留，但不会推进增量 checkpoint；修复登录后可以安全重跑。
 
 额外可用选项：
 - `--save-images / --no-images`：是否下载笔记图片（默认下载）

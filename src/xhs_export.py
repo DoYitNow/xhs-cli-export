@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Standalone Xiaohongshu favorites/likes exporter to Markdown.
+"""Standalone Xiaohongshu favorites/likes/search exporter to Markdown.
 
 Exports notes from Xiaohongshu (via xhs-cli) into structured Markdown files
 with frontmatter, original text, interaction data, and optional image downloads.
@@ -8,6 +8,7 @@ Usage:
     python xhs_export.py check
     python xhs_export.py export --source likes --max 200
     python xhs_export.py export --source favorites --output-dir ./my-notes
+    python xhs_export.py export --source search --keyword "React 教程" --sort popular
 
 Output structure:
     <output-dir>/
@@ -35,11 +36,25 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+
 INVALID_FILENAME_CHARS = r'<>:"/\|?*'
 SCRIPT_DIR = Path(__file__).resolve().parent
 SOURCE_LABELS = {
     "favorites": "收藏",
     "likes": "点赞",
+    "search": "搜索",
+}
+
+SEARCH_SORT_MAP = {
+    "general": "general",
+    "popular": "popularity_descending",
+    "latest": "time_descending",
+}
+
+SEARCH_TYPE_MAP = {
+    "all": 0,
+    "video": 1,
+    "image": 2,
 }
 STABLE_HEADLESS_XHS = Path.home() / ".xiaohongshu-cli" / "headless-venv" / "Scripts" / "xhs.exe"
 LEGACY_XHS_CONFIG = Path.home() / ".xhs-cli" / "cookies.json"
@@ -154,13 +169,7 @@ def xhs_command(xhs_bin: str, args: list[str]) -> list[str]:
     return [xhs_bin, *args]
 
 
-def run_xhs(
-    xhs_bin: str,
-    args: list[str],
-    *,
-    check: bool = True,
-    cwd: str | None = None,
-) -> subprocess.CompletedProcess:
+def run_xhs(xhs_bin: str, args: list[str], *, check: bool = True, cwd: str | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
@@ -935,6 +944,143 @@ def fetch_source_payload(args: argparse.Namespace, xhs_bin: str) -> tuple[Any, s
     return result, raw_stdout, fetch_complete
 
 
+def fetch_search_notes(args: argparse.Namespace, xhs_bin: str) -> tuple[Any, str, bool]:
+    """Fetch notes by searching keywords via xhs CLI, page by page.
+
+    Returns (payload, raw_stdout, fetch_complete) matching fetch_source_payload signature.
+    """
+    keyword = args.keyword
+    if not keyword:
+        raise ValueError("source=search 时必须提供 --keyword 参数。")
+
+    sort_value = SEARCH_SORT_MAP.get(args.sort, "general")
+    type_value = SEARCH_TYPE_MAP.get(args.search_type, 0)
+    max_total = args.max  # 0 = unlimited
+
+    safe_print(f"正在搜索小红书笔记: \"{keyword}\" (排序={args.sort}, 类型={args.search_type})")
+    safe_print("提示: 如有验证码弹窗，请在弹出的浏览器窗口中手动处理。")
+    safe_print("")
+
+    # Prepare incremental JSONL save file
+    output_dir = Path(args.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_path = output_dir / "search_stream.jsonl"
+    jsonl_path.write_text("", encoding="utf-8")
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+
+    collected_notes: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    page = 1
+    max_retries = 3
+    fetch_complete = True
+
+    progress = ProgressBar(max_total or 100, label="搜索")
+
+    while True:
+        if max_total > 0 and len(collected_notes) >= max_total:
+            break
+
+        search_args = [
+            "search", keyword,
+            "--sort", args.sort,
+            "--type", args.search_type,
+            "--page", str(page),
+            "--json",
+        ]
+
+        # Retry loop for transient failures
+        proc = None
+        last_error = ""
+        for attempt in range(1, max_retries + 1):
+            try:
+                proc = subprocess.run(
+                    xhs_command(xhs_bin, search_args),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                )
+                if proc.returncode == 0:
+                    break
+                last_error = (proc.stderr or proc.stdout or "").strip()
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2)
+            except subprocess.TimeoutExpired:
+                last_error = "命令超时"
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2)
+
+        if proc is None or proc.returncode != 0:
+            if collected_notes:
+                safe_print(f"\n⚠ 搜索在第 {page} 页失败，已保留 {len(collected_notes)} 条结果。")
+                safe_print(f"  错误: {last_error[:200]}")
+                fetch_complete = False
+            else:
+                raise RuntimeError(f"搜索失败: {last_error[:500]}")
+            break
+
+        payload = parse_xhs_json(proc)
+        if payload is None:
+            if page == 1:
+                raise RuntimeError("无法解析搜索结果 JSON。")
+            safe_print(f"\n⚠ 第 {page} 页返回非 JSON 内容，可能已到末尾。")
+            break
+
+        page_notes = coerce_notes(payload) if isinstance(payload, (dict, list)) else []
+        if not page_notes:
+            # No more results
+            break
+
+        new_count = 0
+        with jsonl_path.open("a", encoding="utf-8") as f:
+            for note in page_notes:
+                # Stop if we've reached the max
+                if max_total > 0 and len(collected_notes) >= max_total:
+                    break
+                nid = note_id_from(note)
+                if nid and nid in seen_ids:
+                    continue
+                if nid:
+                    seen_ids.add(nid)
+                f.write(json.dumps(note, ensure_ascii=False) + "\n")
+                collected_notes.append(note)
+                new_count += 1
+
+        progress.total = max_total if max_total > 0 else max(progress.total, len(collected_notes) + 20)
+        progress.current = len(collected_notes)
+        progress.update(0, suffix=f"第{page}页 +{new_count}")
+
+        if new_count == 0:
+            # All notes on this page were duplicates
+            break
+
+        page += 1
+
+        # Small delay between pages to be polite
+        import time
+        time.sleep(1.5)
+
+    progress.finish(suffix=f"共 {len(collected_notes)} 条 (共 {page} 页)")
+
+    if not collected_notes:
+        raise RuntimeError(
+            f"搜索 \"{keyword}\" 未找到任何笔记。请检查关键词或登录状态。"
+        )
+
+    safe_print(f"✅ 搜索完成，已保存 {len(collected_notes)} 条笔记到: {jsonl_path}")
+
+    result = {"notes": collected_notes}
+    raw_stdout = json.dumps(result, ensure_ascii=False, indent=2)
+    return result, raw_stdout, fetch_complete
+
+
 def _write_export_index(
     *,
     run_dir: Path,
@@ -1227,6 +1373,166 @@ def _export_notes_streaming(
     safe_print(f"状态文件: {state_file}")
 
 
+def _export_search(
+    *,
+    args: argparse.Namespace,
+    xhs_bin: str,
+    source: str,
+    source_label: str,
+    output_dir: Path,
+    run_dir: Path,
+    image_root: Path,
+    state_file: Path,
+    run_started: dt.datetime,
+    run_started_iso: str,
+    run_id: str,
+    captured_date: str,
+) -> None:
+    """Export search results: paginate through search, fetch details, generate markdown."""
+    keyword = args.keyword
+    state = load_state(state_file)
+    source_state = state.setdefault("sources", {}).setdefault(source, {})
+    window_start_iso = str(source_state.get("last_success_at", "") or "")
+    seen_note_ids = set(source_state.get("seen_note_ids", []))
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if args.save_images:
+        image_root.mkdir(parents=True, exist_ok=True)
+
+    safe_print(f"正在搜索并导出笔记: \"{keyword}\"")
+
+    # Fetch all search results (paginated)
+    payload, raw_stdout, fetch_complete = fetch_search_notes(args, xhs_bin)
+    notes = coerce_notes(payload)
+    if args.limit:
+        notes = notes[: args.limit]
+
+    # Incremental filter: search results don't have action timestamps,
+    # so we dedup purely by note_id
+    selected: list[tuple[dict[str, Any], str]] = []
+    skipped: list[str] = []
+    for item in notes:
+        note_id = note_id_from(item)
+        if args.all_history or not seen_note_ids:
+            reason = "all_history" if args.all_history else "first_run"
+            selected.append((item, reason))
+        elif note_id and note_id not in seen_note_ids:
+            selected.append((item, "new_note_id"))
+        else:
+            skipped.append(note_id or "(unknown)")
+
+    if args.dry_run:
+        safe_print(f"将导出 {len(selected)} 条（共加载 {len(notes)} 条）搜索笔记到: {run_dir}")
+        safe_print(f"关键词: \"{keyword}\"")
+        safe_print(f"增量窗口: 已见 {len(seen_note_ids)} 条笔记")
+        return
+
+    # Save raw JSON
+    raw_path = run_dir / f"{source}_raw.json"
+    raw_path.write_text(raw_stdout, encoding="utf-8")
+
+    generated: list[Path] = []
+    detail_failures: list[dict[str, str]] = []
+    all_run_note_ids: set[str] = set(seen_note_ids)
+
+    progress = ProgressBar(len(selected), label=f"导出搜索")
+
+    for index, (item, increment_reason) in enumerate(selected, 1):
+        detail: dict[str, Any] = {}
+        detail_payload: Any = {}
+        note_id = note_id_from(item)
+        token = xsec_token_from(item)
+
+        # Always fetch details for search results since they typically lack description
+        if note_id:
+            try:
+                detail_args = ["read", note_id, "--json"]
+                if token:
+                    detail_args.extend(["--xsec-token", token])
+                proc = run_xhs(xhs_bin, detail_args)
+                detail_payload = json.loads(proc.stdout)
+                detail = normalize_detail(detail_payload)
+                detail_path = run_dir / "details"
+                detail_path.mkdir(parents=True, exist_ok=True)
+                (detail_path / f"{note_id}.json").write_text(
+                    json.dumps(detail_payload, ensure_ascii=False, indent=2), encoding="utf-8",
+                )
+            except Exception as exc:
+                detail = {"export_error": str(exc)}
+                detail_failures.append({"note_id": note_id, "reason": str(exc)})
+
+        media_urls = extract_media_urls(detail or detail_payload or item)
+        saved_images: list[dict[str, str]] = []
+        failed_images: list[dict[str, str]] = []
+        if args.save_images and media_urls and note_id:
+            saved_images, failed_images = download_images(
+                media_urls,
+                target_dir=image_root / sanitize_filename(note_id, fallback=f"note-{index:04d}"),
+                max_images=args.max_images_per_note,
+            )
+
+        # Enrich increment reason with search keyword
+        search_reason = f"{increment_reason}:keyword={keyword}"
+
+        filename, markdown = markdown_for_note(
+            item, detail,
+            captured_date=captured_date,
+            run_started_iso=run_started_iso,
+            window_start_iso=window_start_iso,
+            source=source,
+            source_label=f"{source_label}「{keyword}」",
+            increment_reason=search_reason,
+            saved_images=saved_images,
+            failed_images=failed_images,
+            include_media_urls=args.include_media_urls,
+            output_base=output_dir,
+        )
+        target = run_dir / f"{index:04d}-{filename}"
+        title_short = (filename.split("--")[0] if "--" in filename else filename.replace(".md", ""))[:30]
+        if target.exists() and not args.overwrite:
+            progress.update(1, suffix=f"跳过 {title_short}")
+            generated.append(target)
+        else:
+            target.write_text(markdown, encoding="utf-8")
+            progress.update(1, suffix=title_short)
+            generated.append(target)
+
+        if note_id:
+            all_run_note_ids.add(note_id)
+
+    progress.finish(suffix=f"共 {len(generated)} 条")
+
+    # Save stream JSONL (already saved by fetch_search_notes, but also save raw)
+    jsonl_path = output_dir / "search_stream.jsonl"
+
+    _write_export_index(
+        run_dir=run_dir, source=source, source_label=f"{source_label}「{keyword}」",
+        captured_date=captured_date, run_started_iso=run_started_iso,
+        window_start_iso=window_start_iso, fetch_details=args.fetch_details,
+        save_images=args.save_images, notes_count=len(notes),
+        generated=generated, skipped=skipped, detail_failures=detail_failures,
+    )
+
+    if fetch_complete:
+        update_incremental_state(
+            state, source=source, run_started_iso=run_started_iso,
+            output_dir=run_dir, notes=notes, exported_count=len(generated), state_file=state_file,
+        )
+    else:
+        if notes:
+            safe_print(
+                f"⚠ 搜索未完全成功，已保留 {len(notes)} 条结果；"
+                "本次不会更新增量成功 checkpoint。"
+            )
+        else:
+            safe_print("⚠ 本次搜索未完全成功，已跳过增量状态更新。")
+
+    safe_print(f"已导出 {len(generated)} 条搜索笔记。")
+    safe_print(f"搜索关键词: \"{keyword}\"")
+    safe_print(f"Markdown 输出: {run_dir}")
+    safe_print(f"状态文件: {state_file}")
+
+
 def export_notes(args: argparse.Namespace) -> None:
     run_started = now_utc()
     run_started_iso = run_started.isoformat()
@@ -1237,6 +1543,9 @@ def export_notes(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir).resolve()
     state_file = (Path(args.state_file).resolve() if args.state_file
                   else output_dir / "xhs_state.json")
+
+    if source == "search" and not args.keyword:
+        raise ValueError("source=search 时必须提供 --keyword 参数。")
 
     if args.reset_state:
         reset_source_state(source, state_file)
@@ -1252,7 +1561,12 @@ def export_notes(args: argparse.Namespace) -> None:
     if args.dry_run and not args.input_json:
         safe_print(f"将要导出来源: {source_label} ({source})")
         safe_print(f"xhs 可执行文件: {xhs_bin}")
-        if args.fetch_details:
+        if source == "search":
+            safe_print(f"搜索关键词: \"{args.keyword}\"")
+            safe_print(f"排序: {args.sort}, 类型: {args.search_type}")
+            safe_print(f"将要运行: xhs search \"{args.keyword}\" --sort {args.sort} --type {args.search_type} --page N --json")
+            safe_print("模式: 分页搜索 → 逐条抓详情 → 逐条导出")
+        elif args.fetch_details:
             safe_print(f"将要运行: xhs {source} --max {args.max} --json --stream --no-detail（流式详情）")
             safe_print("模式: 流式详情（逐条获取列表 → 逐条抓详情 → 逐条导出）")
         else:
@@ -1260,6 +1574,16 @@ def export_notes(args: argparse.Namespace) -> None:
             safe_print("模式: 快速列表（封面图优先，可能没有正文）")
         safe_print(f"将要导出 Markdown 到: {run_dir}")
         safe_print(f"将要使用状态文件: {state_file}")
+        return
+
+    # ── Search path: paginate through search results ──
+    if source == "search":
+        _export_search(
+            args=args, xhs_bin=xhs_bin, source=source, source_label=source_label,
+            output_dir=output_dir, run_dir=run_dir, image_root=image_root,
+            state_file=state_file, run_started=run_started, run_started_iso=run_started_iso,
+            run_id=run_id, captured_date=captured_date,
+        )
         return
 
     # ── Streaming detail path: fetch list via NDJSON, export each note immediately ──
@@ -1403,7 +1727,7 @@ def check_install(args: argparse.Namespace) -> None:
         if not authenticated:
             safe_print("")
             safe_print("恢复建议:")
-            safe_print("  1. 正常浏览器完成小红书登录/验证")
+            safe_print(f"  1. 正常浏览器完成小红书登录/验证")
             safe_print(f"  2. 导入字段: \"{xhs_bin}\" auth import-fields --interactive")
             safe_print(f"  3. 或扫码: \"{xhs_bin}\" login --qr-output xhs-login-qr.png")
         return
@@ -1445,7 +1769,7 @@ def login(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="将小红书收藏/点赞笔记导出为 Markdown 文件。",
+        description="将小红书收藏/点赞/搜索笔记导出为 Markdown 文件。",
     )
     parser.add_argument("--xhs-bin", help="xhs.exe 的完整路径（如果不在 PATH 中）。")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1466,7 +1790,14 @@ def build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("--xhs-bin", default=argparse.SUPPRESS,
                           help="xhs.exe 的完整路径（如果不在 PATH 中）。")
     export_p.add_argument("--source", choices=sorted(SOURCE_LABELS), required=True,
-                          help="要导出的记录类型 (favorites / likes)。")
+                          help="要导出的记录类型 (favorites / likes / search)。")
+    export_p.add_argument("--keyword",
+                          help="搜索关键词（仅 source=search 时必填）。")
+    export_p.add_argument("--sort", choices=["general", "popular", "latest"], default="general",
+                          help="搜索排序方式（仅 source=search 时有效）。")
+    export_p.add_argument("--search-type", choices=["all", "video", "image"], default="all",
+                          dest="search_type",
+                          help="搜索笔记类型（仅 source=search 时有效）。")
     export_p.add_argument("--max", type=int, default=0,
                           help="从小红书加载的最大记录数；0 表示不限量。")
     export_p.add_argument("--limit", type=int, default=0,

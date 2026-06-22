@@ -1,15 +1,16 @@
 # xhs-cli-export
 
-> 📕 小红书收藏/点赞笔记导出为 Markdown 的工具
+> 📕 小红书收藏/点赞/搜索笔记导出为 Markdown 的工具
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-基于 [xhs-cli-headless](https://github.com/kyalpha313/xhs-cli-headless) 的逆向工程 API，将小红书收藏和点赞导出为结构化 Markdown 文件。
+基于 [xhs-cli-headless](https://github.com/kyalpha313/xhs-cli-headless) 的逆向工程 API，将小红书收藏、点赞和搜索结果导出为结构化 Markdown 文件。
 
 ## ✨ 功能特性
 
 - 📝 **Markdown 导出** — 带 frontmatter 的结构化输出，兼容 Obsidian 等笔记软件
+- 🔍 **搜索导出** — 按关键词搜索小红书笔记并导出，支持排序和类型筛选
 - 🔄 **增量同步** — 智能跳过已导出的笔记，避免重复
 - 📸 **图片下载** — 自动下载笔记图片到本地
 - 💾 **崩溃恢复** — JSONL 流式保存，中断不丢失进度
@@ -83,11 +84,33 @@ python src/xhs_export.py export --source favorites --no-images
 python src/xhs_export.py export --source favorites --reset-state
 ```
 
+### 搜索导出
+
+```bash
+# 搜索并导出（默认综合排序、全部类型）
+python src/xhs_export.py export --source search --keyword "React 教程"
+
+# 按热度排序、仅图片笔记
+python src/xhs_export.py export --source search --keyword "旅行攻略" --sort popular --type image
+
+# 限制数量、指定输出目录
+python src/xhs_export.py export --source search --keyword "Python" --max 50 --output-dir ./search-notes
+
+# 按最新排序、仅视频
+python src/xhs_export.py export --source search --keyword "美食" --sort latest --type video
+
+# 快速预览
+python src/xhs_export.py export --source search --keyword "穿搭" --max 20 --no-fetch-details --dry-run
+```
+
 ### 完整参数
 
 | 参数 | 说明 | 默认值 |
 |---|---|---|
-| `--source` | 导出来源：`favorites` / `likes` | 必填 |
+| `--source` | 导出来源：`favorites` / `likes` / `search` | 必填 |
+| `--keyword` | 搜索关键词（`source=search` 时必填） | - |
+| `--sort` | 搜索排序：`general` / `popular` / `latest` | `general` |
+| `--search-type` | 搜索类型：`all` / `video` / `image` | `all` |
 | `--max` | 最大加载数量（0=不限） | 0 |
 | `--limit` | 只转换前 N 条 | 0 |
 | `--output-dir` | 输出目录 | 当前目录 |
@@ -205,6 +228,7 @@ cp -r claude-skill ~/.claude/skills/xiaohongshu-export
 然后在 Claude Code 中可以直接说：
 - "导出我的小红书收藏"
 - "同步小红书点赞到本地"
+- "搜索小红书上的租房信息并导出"
 
 ## 🤝 致谢
 

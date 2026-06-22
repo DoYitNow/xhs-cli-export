@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-22
+
+### Added
+
+- 支持搜索导出（`--source search`），可通过关键词搜索小红书笔记并导出
+- 搜索支持排序参数：`--sort general|popular|latest`
+- 搜索支持类型筛选：`--search-type all|video|image`
+- 搜索结果自动分页获取，支持增量去重
+- 搜索导出始终获取笔记详情（搜索 API 不返回正文）
+
 ## [0.1.0] - 2026-06-17
 
 ### Added
